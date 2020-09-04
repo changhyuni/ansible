@@ -1,0 +1,19 @@
+---
+- name: yum install
+  tasks:
+  yum_repository:
+    name: YUM REPO
+    baseurl: https://download.docker.com/linux/centos/docker-ce.repo
+  yum:
+    name: "{{ packages }}"
+    enablerepo: docker-ce
+  vars:
+    packages:
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+  
+  
+         
+    
+    

@@ -1,0 +1,10 @@
+- name: install man fuckyou
+  hosts: host2.cccr.co.kr
+  become: true
+  remote_user: user
+  tasks:
+    - name: Install Service
+      yum:
+        name: mysql            # 여러개 설치할때는 리스트를 사용함
+        state: latest
+    

@@ -1,0 +1,39 @@
+---
+- name: install man fuckyou
+  hosts: web
+  become: true
+  remote_user: user
+  vars:
+    pkg_name: httpd
+    svc_name: httpd
+    fw_name: http
+  tasks:
+    - name: Install Service
+      yum:
+        name: httpd            # 여러개 설치할때는 리스트를 사용함
+        state: latest
+    
+    - name: Start Service
+      service:
+        name: httpd           # 서비스는 리스트를 지원하지 않는다
+        state: started
+        enabled: true
+  
+
+    - name: copy-index.html
+      copy:
+        src: index.html
+        dest: /var/www/html/index.html
+
+
+
+    - name: install man fuckyou
+      hosts: host2.cccr.co.kr
+      become: true
+      remote_user: user
+      tasks:
+      - name: Install Service
+        yum:
+          name: mysql            # 여러개 설치할때는 리스트를 사용함
+          state: latest
+    

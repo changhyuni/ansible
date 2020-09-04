@@ -1,0 +1,6 @@
+---
+- name: create haproxy
+  template:
+    src: haproxy.j2.cfg
+    dest: /etc/haproxy/haproxy.cfg
+

@@ -1,0 +1,648 @@
+In the third article of this series, I set up Docker, MySQL and WordPress with Ansible on my server. In this fourth and final article, I will show you how to set up HAProxy – again with Ansible – as well as a free HTTPS certificate from Let’s Encrypt / CertBot to make the website accessible via HTTPS.
+
+The article code can be found in my GitLab repository at https://gitlab.com/SvenWoltmann/happycoders-tutorial-server-setup.
+
+In addition to the article, there is again a (German-only) video tutorial: Setup of HAProxy and a HTTPS certificate from Let’s Encrypt with Ansible
+
+The article series is divided into the following four parts:
+
+Setup of a dedicated server with Ansible
+Setup of user accounts, SSH and firewall with Ansible
+Setup of Docker, MySQL and WordPress with Ansible
+Setup of HAProxy and a HTTPS certificate from Let’s Encrypt with Ansible
+Contents [show]
+
+Installing HAProxy
+In the first step, I will install HAProxy without specific configuration because I want to use the configuration file haproxy.cfg created in the process as a starting point for my further configuration. However, I don’t want to install version 1.7 available under Debian Stretch but the latest version 1.8 because it supports the modern HTTP/2 protocol. I get this version from the stretch-backports repository.
+
+I create a role, happy1_haproxy with the task definition file roles/happy1_haproxy/tasks/main.yml, and I add the entry happy1_haproxy to the array roles in my playbook happy1.yml so that the new role is executed the next time the playbook is executed. In the main.yml, I enter the following two tasks:
+
+---
+- name: Add "stretch-backports" to sources (required for HAProxy 1.8)
+  apt_repository:
+    repo: deb http://httpredir.debian.org/debian stretch-backports main
+    state: present
+    update_cache: yes
+
+- name: Install HAProxy
+  apt:
+    name: haproxy
+    state: present
+    default_release: stretch-backports
+    cache_valid_time: 3600
+With the Ansible module apt_repository, I add the backports repository to APT. In the apt module, I then use the default_release parameter to specify that the backports repository should be used to install HAProxy.
+
+I’m running the playbook:
+
+ansible-playbook --ask-vault-pass happy1.yml
+Installing HAProxy via Ansible
+Installing HAProxy via Ansible
+That docker-compose up -d reports the status changed can be ignored. This is because the command is executed through the Ansible module shell, which does not interpret the output of the command (which is: “wordpress_db_1 is up-to-date, wordpress_wordpress_1 is up-to-date”) as “no change”.
+
+Configuring HAProxy
+I now copy the HAProxy default configuration file /etc/haproxy/haproxy.cfg from the server to the local template directory for my role happy1_haproxy as roles/happy1_haproxy/templates/haproxy.cfg.j2. I copy the file to the template directory and not the file directory because I first want to protect the website with a password – but want to make it easy to disable this with a variable later. Now I extend the configuration with the following three sections:
+
+Section frontend – here I define that HAProxy is bound to port 80 and should forward all requests to the backend happycoders_wordpress:
+
+frontend happycoders_80
+    bind *:80
+    default_backend happycoders_wordpress
+Section backend – here the previously referenced backend happycoders_wordpress is defined, which should forward the requests to the local port 8001, on which the Docker WordPress container is running.
+
+backend happycoders_wordpress
+    mode http
+    server server1 localhost:8001 check
+    http-response del-header x-powered-by
+{% if happycoders_testing|default(false) %}
+    acl authorized http_auth(happycoders_test_users)
+    acl wp-cron path_beg -i /wp-cron.php
+    http-request auth realm HappyCoders.eu unless authorized or wp-cron
+{% endif %}
+The server name server1 is arbitrary, and the check option ensures that regular health checks are performed. With http-response del-header, I remove the version information returned by PHP as a response header for security reasons. The remaining lines activate basic authentication if the variable happycoders_testing is set to true. In detail:
+
+The ACL authorized checks whether the user is already authorized.
+With the ACL wp-cron, I make sure that WordPress can call its own scheduler. It is important that this ACL is defined via the path /wp-cron.php, not via the source IP address because – when the scheduler is called – that call’s source IP is not the server’s address, but the address of the Docker container.
+With the directive http-request auth, the authorization is finally requested, unless the user is already authorized or the request goes to the WordPress scheduler.
+The last section userlist lists the user(s) who should have access via basic authentication. My password is encrypted with mkpasswd:
+
+Encrypting my password with "mkpasswd"
+Encrypting my password with “mkpasswd”
+I enter the user list as follows:
+
+{% if happycoders_testing|default(false) %}
+userlist happycoders_test_users
+    user sven password X/UgQ53BouggY
+{% endif %}
+The finished file roles/happy1_haproxy/templates/haproxy.cfg.j2 now looks like this (I combined the two if blocks into one):
+
+global
+    log /dev/log    local0
+    log /dev/log    local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+
+    # Default SSL material locations
+    ca-base /etc/ssl/certs
+    crt-base /etc/ssl/private
+
+    # Default ciphers to use on SSL-enabled listening sockets.
+    # For more information, see ciphers(1SSL). This list is from:
+    #  https://hynek.me/articles/hardening-your-web-servers-ssl-ciphers/
+    # An alternative list with additional directives can be obtained from
+    #  https://mozilla.github.io/server-side-tls/ssl-config-generator/?server=haproxy
+    ssl-default-bind-ciphers ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!MD5:!DSS
+    ssl-default-bind-options no-sslv3
+
+defaults
+    log     global
+    mode    http
+    option  httplog
+    option  dontlognull
+    timeout connect 5000
+    timeout client  50000
+    timeout server  50000
+    errorfile 400 /etc/haproxy/errors/400.http
+    errorfile 403 /etc/haproxy/errors/403.http
+    errorfile 408 /etc/haproxy/errors/408.http
+    errorfile 500 /etc/haproxy/errors/500.http
+    errorfile 502 /etc/haproxy/errors/502.http
+    errorfile 503 /etc/haproxy/errors/503.http
+    errorfile 504 /etc/haproxy/errors/504.http
+
+frontend happycoders_80
+    bind *:80
+    default_backend happycoders_wordpress
+
+backend happycoders_wordpress
+    mode http
+    server server1 localhost:8001 check
+    http-response del-header x-powered-by
+{% if happycoders_testing|default(false) %}
+    acl authorized http_auth(happycoders_test_users)
+    acl wp-cron path_beg -i /wp-cron.php
+    http-request auth realm HappyCoders.eu unless authorized or wp-cron
+
+userlist happycoders_test_users
+    user sven password X/UgQ53BouggY
+{% endif %}
+To enable basic authentication, I add the following line to my host configuration file host_vars/happy1.happycoders.eu:
+
+happycoders_testing: true
+To copy the configuration file to the server, I add the following task to the file roles/happy1_haproxy/tasks/main.yml:
+
+- name: Configure HAProxy
+  template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: root
+    mode: 0644
+  notify:
+  - Restart HAProxy
+I already explained the template module and the notify function in the second part of this article series. For this, I need the corresponding handler in the file roles/happy1_haproxy/handlers/main.yml:
+
+---
+- name: Restart HAProxy
+  service:
+    name: haproxy
+    state: restarted
+I’m running the playbook again:
+
+ansible-playbook --ask-vault-pass happy1.yml
+Configuring HAProxy with Ansible
+Configuring HAProxy with Ansible
+The website is now directly accessible via port 80 via the URL http://happy1.happycoders.eu. Port 8001 can now be closed in the firewall by removing the corresponding entry of the array firewall_allowed_tcp_ports from the file host_vars/happy1.happycoders.eu. I run the playbook again and then restart Docker (sudo service docker restart), because – as described in the previous article – the Docker rules were removed by changing the firewall rules.
+
+Installing Certbot
+Now to the exciting part of the article: Next, I want the page to be accessible via HTTPS. I have to bind HAProxy to HTTPS port 443 and forward it to port 8001, and I have to install an SSL/TLS certificate. I get an SSL/TLS certificate for free at Let’s Encrypt. The certificate request runs automatically via Certbot. Certbot can also install the certificates automatically in Apache and nginx. For the installation in HAProxy, a separate plugin is required, which is offered by Greenhost: HAProxy plugin for Let’s Encrypt’s Certbot
+
+First of all, Certbot must be installed. I will follow the instructions at https://certbot.eff.org/lets-encrypt/debianstretch-haproxy to do this. As always, I’ll transfer them into an Ansible role. I don’t create a separate role for Certbot, but add the installation steps to the happy1_haproxy role because the configuration of Certbot is very closely linked to the configuration of HAProxy.
+
+However, this time I would like to make things a bit more orderly right at the start, and I move the first three commands for installing and configuring HAProxy from roles/happy1_haproxy/tasks/main.yml to roles/happy1_haproxy/tasks/install_haproxy.yml and write the following into main.yml instead:
+
+---
+- import_tasks: install_haproxy.yml
+- import_tasks: install_certbot.yml
+I create the file roles/happy1_haproxy/tasks/install_certbot.yml with the following two tasks to install Certbot:
+
+---
+- name: Add "stretch-backports" to sources (required for Certbot)
+  apt_repository:
+    repo: deb http://httpredir.debian.org/debian stretch-backports main
+    state: present
+    update_cache: yes
+
+- name: Install Certbot
+  apt:
+    name: python-certbot
+    state: present
+    default_release: stretch-backports
+    cache_valid_time: 3600
+According to instructions for the HAProxy plugin for Certbot, the following command should now be executed:
+
+openssl dhparam -out /opt/certbot/dhparams.pem 2048
+For this, there is the Ansible module openssl_dhparam, which I enter into the install_certbot.yml as follows. But first I have to create the target directory /opt/certbot:
+
+- name: Create Certbot directory
+  file:
+    path: /opt/certbot
+    state: directory
+    owner: root
+    group: root
+    mode: 0755
+
+- name: Generate 2048 bit dhparams.pem file
+  openssl_dhparam:
+    owner: root
+    group: root
+    mode: 0644
+    path: /opt/certbot/dhparams.pem
+    size: 2048
+Furthermore, as the article recommends, I would like to start Certbot as an unprivileged user and create a user certbot. Since the Ansible module user also creates the home directory, I can remove the Create Certbot directory command right away and create the user before I generate the dhparams.pem file. Finally, I create the three requested directories:
+
+- name: Create Certbot group
+  group:
+    name: certbot
+    state: present
+
+- name: Create Certbot user
+  user:
+    name: certbot
+    group: certbot
+    groups: haproxy
+    shell: /bin/bash
+    home: /opt/certbot
+    state: present
+
+- name: Generate 2048 bit dhparams.pem file
+  openssl_dhparam:
+    owner: root
+    group: root
+    mode: 0644
+    path: /opt/certbot/dhparams.pem
+    size: 2048
+
+- name: Create Certbot log directory
+  file:
+    path: /opt/certbot/logs
+    state: directory
+    owner: certbot
+    group: certbot
+    mode: 0755
+
+- name: Create Certbot config directory
+  file:
+    path: /opt/certbot/config
+    state: directory
+    owner: certbot
+    group: certbot
+    mode: 0755
+
+- name: Create Certbot .config/letsencrypt directory
+  file:
+    path: /opt/certbot/.config/letsencrypt
+    state: directory
+    owner: certbot
+    group: certbot
+    mode: 0755
+Next, I have to create the configuration file /opt/certbot/.config/letsencrypt/cli.ini on the server. I save it locally in my role under roles/happy1_haproxy/files/cli.ini with the following content:
+
+work-dir=/opt/certbot/
+logs-dir=/opt/certbot/logs/
+config-dir=/opt/certbot/config/
+To copy the file to the server, I add the following to the tasks definition file:
+
+- name: Copy Certbot configuration
+  copy:
+    src: cli.ini
+    dest: /opt/certbot/.config/letsencrypt/cli.ini
+    owner: root
+    group: root
+    mode: 0644
+If a certificate is renewed, HAProxy must be restarted afterwards. Allowing the certbot user to do this is done with an entry in the /etc/sudoers file and can be done very easily with the Ansible module lineinfile, where I specify that an existing line starting with %certbot will be overwritten. So I add the following task:
+
+- name: Allow the certbot user to restart HAProxy
+  lineinfile:
+    dest: /etc/sudoers
+    state: present
+    regexp: '^%certbot'
+    line: '%certbot ALL=NOPASSWD: /bin/systemctl restart haproxy'
+The next step is to install the certbox-haproxy module. For this, I use the Ansible modules git, easy_install and pip and enter the following into the tasks definition file:
+
+- name: Clone certbot-haproxy repository
+  git:
+    repo: https://code.greenhost.net/open/certbot-haproxy.git
+    dest: /opt/certbot/certbot-haproxy
+
+- name: Install python-setuptools
+  apt:
+    name: python-setuptools
+    state: present
+
+- name: Install pip
+  easy_install:
+    name: pip
+
+- name: Install certbot-haproxy
+  pip:
+    name: /opt/certbot/certbot-haproxy/
+The first task clones the git repository of the certbot-haproxy module. The second task installs the python-setuptools, which contain the program easy_install, which in turn installs pip, a package management program for Python packages in the third task. The fourth task finally calls pip to compile and install the certbot-haproxy module.
+
+Now you have to make changes to the haproxy.cfg.j2. First, the file dhparams.pem created by Ansible must be entered. For this purpose, a line is appended in the global section, so that the section ends as follows:
+
+    ssl-default-bind-ciphers ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!MD5:!DSS
+    ssl-default-bind-options no-sslv3
+    ssl-dh-param-file /opt/certbot/dhparams.pem
+Also, the Let’s Encrypt server’s requests (whose path begins with /.well-known/acme-challenge) must be redirected to the certbot-haproxy module, which is bound to port 8000. Therefore, I extend the frontend section as follows:
+
+frontend happycoders_80
+    bind *:80
+
+    # Forward Certbot verification requests to the certbot-haproxy plugin
+    acl is_certbot path_beg -i /.well-known/acme-challenge
+    use_backend certbot if is_certbot
+
+    default_backend happycoders_wordpress
+And at the end of haproxy.cfg.j2, I enter the backend certbot:
+
+backend certbot
+    log global
+    mode http
+    server certbot 127.0.0.1:8000
+Since the password query is defined in the happycoders_wordpress backend, the Let’s Encrypt server’s challenge requests via the path /.well-known/acme-challenge are not affected. For those who have lost the overview: here is again the complete content of the file roles/happy1_haproxy/templates/haproxy.cfg.j2:
+
+global
+    log /dev/log    local0
+    log /dev/log    local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+
+    # Default SSL material locations
+    ca-base /etc/ssl/certs
+    crt-base /etc/ssl/private
+
+    # Default ciphers to use on SSL-enabled listening sockets.
+    # For more information, see ciphers(1SSL). This list is from:
+    #  https://hynek.me/articles/hardening-your-web-servers-ssl-ciphers/
+    # An alternative list with additional directives can be obtained from
+    #  https://mozilla.github.io/server-side-tls/ssl-config-generator/?server=haproxy
+    ssl-default-bind-ciphers ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!MD5:!DSS
+    ssl-default-bind-options no-sslv3
+    ssl-dh-param-file /opt/certbot/dhparams.pem
+
+defaults
+    log     global
+    mode    http
+    option  httplog
+    option  dontlognull
+    timeout connect 5000
+    timeout client  50000
+    timeout server  50000
+    errorfile 400 /etc/haproxy/errors/400.http
+    errorfile 403 /etc/haproxy/errors/403.http
+    errorfile 408 /etc/haproxy/errors/408.http
+    errorfile 500 /etc/haproxy/errors/500.http
+    errorfile 502 /etc/haproxy/errors/502.http
+    errorfile 503 /etc/haproxy/errors/503.http
+    errorfile 504 /etc/haproxy/errors/504.http
+
+frontend happycoders_80
+    bind *:80
+
+    # Forward Certbot verification requests to the certbot-haproxy plugin
+    acl is_certbot path_beg -i /.well-known/acme-challenge
+    use_backend certbot if is_certbot
+
+    default_backend happycoders_wordpress
+
+backend happycoders_wordpress
+    mode http
+    server server1 localhost:8001 check
+    http-response del-header x-powered-by
+{% if happycoders_testing|default(false) %}
+    acl authorized http_auth(happycoders_test_users)
+    acl wp-cron path_beg -i /wp-cron.php
+    http-request auth realm HappyCoders.eu unless authorized or wp-cron
+
+userlist happycoders_test_users
+    user sven password X/UgQ53BouggY
+{% endif %}
+
+backend certbot
+    log global
+    mode http
+    server certbot 127.0.0.1:8000
+This completes the Certbot installation tasks, and it’s time to run the Ansible playbook:
+
+ansible-playbook --ask-vault-pass happy1.yml
+Installing Certbot and certbot-haproxy with Ansible
+Installing Certbot and certbot-haproxy with Ansible
+Creating the Certbot script
+Now that Certbot and the certbot-haproxy module are installed, it is time to run Certbot. I have several HappyCoders domains that I would like to redirect to happycoders.eu in a later step. Therefore, I need an SSL/TLS certificate for all my domains. Certbot can create certificates for all domains with a single call. First, I create the following array in the host configuration file host_vars/happy1.happycoders.eu:
+
+happycoders_domains:
+  - happycoders.eu
+  - happycoders.at
+  - happycoders.biz
+  - happycoders.ch
+  - happycoders.club
+  - happycoders.de
+  - happycoders.info
+  - happycoders.it
+  - happycoders.me
+  - happycoders.net
+  - happycoders.uk
+I deliberately wrote happycoders.eu at the beginning because the first domain in the certificate is registered as the main domain and all others as alternative domains. The DNS entries for all these domains must point to my server for the Let’s Encrypt server’s challenge requests to arrive. To call Certbot, I create the following script in the file roles/happy1_haproxy/templates/run-certbot.j2:
+
+runuser -l certbot -c 'certbot run \
+    --authenticator certbot-haproxy:haproxy-authenticator \
+    --installer certbot-haproxy:haproxy-installer \
+    --non-interactive \
+    --domains {% for domain in happycoders_domains %}{% if loop.index > 1 %},{% endif %}www.{{ domain }},{{ domain }}{% endfor %} \
+    --expand \
+    --agree-tos \
+    --email sven@happycoders.eu'
+With runuser -l certbot -c '<command>', I call the command specified in apostrophes by the certbot user. The parameters of the certbot command mean in detail:
+
+--authenticator specifies the authenticator plugin – in this case, the previously installed certbot-haproxy module. The authenticator plugin checks whether the domains I want to create certificates for are under my control by making a file available over HTTP, which is then checked by Let’s Encrypt.
+--installer defines the installer plugin – here, I also use the certbot-haproxy module.
+--non-interactive specifies that Certbot runs without user interaction.
+--domains lists the domains for which I want to create certificates. I list each domain first with and then without www.
+--expand specifies that the certificate may be extended if the list of domains is extended. If the list is extended without specifying this parameter, the command aborts with an error message.
+--agree-tos means that I agree to the terms of service.
+--email specifies the email address at which I will be informed about expiring certificates, for example.
+To copy the script to the server, I create the task file roles/happy1_haproxy/tasks/setup_certbot_script.yml with the following content:
+
+---
+- name: Create Certbot scripts directory
+  file:
+    path: /opt/certbot/scripts/
+    state: directory
+    owner: root
+    group: root
+    mode: 0755
+
+- name: Copy Certbot script
+  template:
+    src: run-certbot.j2
+    dest: /opt/certbot/scripts/run-certbot
+    owner: root
+    group: root
+    mode: 0755
+
+- name: Link cronjob to renew Certbot certificates
+  file:
+    src: /opt/certbot/scripts/run-certbot
+    dest: /etc/cron.daily/run-certbot
+    owner: root
+    group: root
+    state: link
+With the already known Ansible modules, I create a directory, copy the script to it and link it to /etc/cron.daily/ so that it runs daily. The reason for this is that the script not only creates the certificates for the first time, but also automatically renews them as soon as they are about to expire. I now import the file setup_certbot_script.yml into the main task definition file roles/happy1_haproxy/tasks/main.yml, which now looks like this:
+
+---
+- import_tasks: install_haproxy.yml
+- import_tasks: install_certbot.yml
+- import_tasks: setup_certbot_script.yml
+I’m running the playbook to install the Certbot script on the server:
+
+ansible-playbook --ask-vault-pass happy1.yml
+Installing the Certbot script with Ansible
+Installing the Certbot script with Ansible
+I check on the server whether the script was created correctly:
+
+The generated Certbot script on the server
+The generated Certbot script on the server
+Running the Certbot Script
+The script looks good, so I’ll execute it right away. I have to do this as root user because only root knows the runuser command.
+
+Running Certbot
+Running Certbot
+The certificates were generated successfully – but my site is not yet accessible via HTTPS because I haven’t created a frontend section in the HAProxy configuration yet.
+
+Before I do, I want to satisfy my curiosity and find out what happens when I run the script again. This time, I get a succinct, satisfying answer:
+
+Cert not yet due for renewal
+Keeping the existing certificate
+Activating HTTPS in HAProxy
+Now I will create the HTTPS frontend. Since this requires the certificate file created by Certbot, HAProxy would not run on a fresh server before Certbot was executed. Without HAProxy, Certbot could not be called – a hen-egg-problem. The solution is to let Ansible check if the certificate exists and create the HTTPS frontend only if this is the case. The check is done by the following task in the file roles/happy1_haproxy/tasks/install_haproxy.yml, which is inserted before the task Configure HAProxy:
+
+- name: Check if the Certbot certificates exist
+  stat:
+    path: /opt/certbot/haproxy_fullchains/__fallback.pem
+  register: certbot_cert_check_result
+I explained the Ansible module stat in the first article of the series. And the following is inserted into haproxy.cfg.j2, before backend happycoders_wordpress:
+
+{% if certbot_cert_check_result.stat.exists %}
+frontend happycoders_443
+    bind *:443 ssl crt /opt/certbot/haproxy_fullchains/__fallback.pem crt /opt/certbot/haproxy_fullchains alpn h2,http/1.1
+
+    # Important, so that WordPress doesn't send a redirect to HTTPS ("https" must be in lowercase letters!)
+    http-request set-header X-Forwarded-Proto https
+
+    default_backend happycoders_wordpress
+{% else %}
+    # SSL not yet activated because certificates do not exist yet.
+    # To create the certificates, run:
+    # sudo /opt/certbot/scripts/run-certbot
+    # Then execute the playbook again.
+{% endif %}
+If the certificate file exists, the HTTPS frontend will be included, otherwise a comment will be entered, with which I will virtually tell myself that the Certbot script still has to be executed. Important is the line http-request set-header X-Forwarded-Proto https – this inserts a header into the HTTP request which informs WordPress that the page was called via HTTPS. Otherwise, WordPress would always reply with a redirect to HTTPS if the page URL configured in WordPress starts with https://.
+
+I run the Ansible playbook again to upload the updated HAProxy configuration to the server. Since nothing significant has changed in the output, I will not take a screenshot here. After executing the playbook, the page is accessible via HTTPS:
+
+WordPress is accessible via HTTPS
+WordPress is accessible via HTTPS
+Via the Chrome console, I verify that the HTTP/2 protocol is used:
+
+HappyCoders.eu on HTTP/2 protocol
+HappyCoders.eu on HTTP/2 protocol
+Redirecting to https://www.happycoders.eu
+Now I want to redirect HTTP to HTTPS – and all alternative HappyCoders domains to www.happycoders.eu. For the redirection from HTTP to HTTPS, one line of code is enough – I enter the following in haproxy.cfg.j2 in the frontend happycoders_80 directly before default_backend:
+
+    # Redirect HTTP to HTTPS for all other cases
+    redirect scheme https code 301 if !is_certbot
+With if !is_certbot, I make sure that the Let’s Encrypt server’s challenge requests can still be made via HTTP. The redirection to www.happycoders.eu can also be done via one line of code:
+
+    # Redirect to https://www.happycoders.eu if another host name was specified
+    redirect prefix https://www.happycoders.eu code 301 if !{ hdr(host) -i www.happycoders.eu }
+However, it becomes more complicated if you also want to return the HTTP Strict Transport Security header to the client. Why this doesn’t work if you enter the corresponding directive in the frontend and what to do instead, is explained in the HAProxy blog article HAProxy and HTTP Strict Transport Security (HSTS) Header in HTTP Redirects. Summarized: the frontend only inserts response headers if the response comes from a backend – therefore a dummy backend is required.
+
+I enter the following in the frontend happycoders_443 – also directly before default_backend:
+
+    http-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+
+    # Redirect to https://www.happycoders.eu if another host name was specified.
+    # Need to do this via a dummy backend + frontend as otherwise the HSTS response header would not be sent.
+    # (see https://www.haproxy.com/de/blog/haproxy-and-http-strict-transport-security-hsts-header-in-http-redirects/)
+    use_backend redirect_to_www_happycoders_eu if !{ hdr(host) -i www.happycoders.eu }
+With the first directive, the HSTS header is inserted, so that the browser will redirect to the HTTPS page via “internal redirect” in the future if http:// is entered – without even calling the HTTP page first. The use_backend directive redirects all requests that do not go to the host www.happycoders.eu to the dummy backend redirect_to_www_happycoders_eu. I insert this together with the dummy frontend as follows – before the backend happycoders_wordpress:
+
+# This dummy backend is needed so that the HSTS response header is also being sent with a redirect (see comment above).
+backend redirect_to_www_happycoders_eu
+    server dummy_redirect_server 127.0.0.1:8002
+
+# This dummy frontend is needed so that the HSTS response header is also being sent with a redirect (see comment above).
+frontend redirect_to_www_happycoders_eu
+    bind 127.0.0.1:8002
+    redirect prefix https://www.happycoders.eu code 301
+The dummy backend thus redirects to the dummy frontend, which finally returns a “permanent redirect” to the host www.happycoders.eu. The resulting overhead can be safely ignored, as this redirect takes place only once a year per user.
+
+The file roles/happy1_haproxy/templates/haproxy.cfg.j2 finally looks like this:
+
+global
+    log /dev/log    local0
+    log /dev/log    local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+
+    # Default SSL material locations
+    ca-base /etc/ssl/certs
+    crt-base /etc/ssl/private
+
+    # Default ciphers to use on SSL-enabled listening sockets.
+    # For more information, see ciphers(1SSL). This list is from:
+    #  https://hynek.me/articles/hardening-your-web-servers-ssl-ciphers/
+    # An alternative list with additional directives can be obtained from
+    #  https://mozilla.github.io/server-side-tls/ssl-config-generator/?server=haproxy
+    ssl-default-bind-ciphers ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!MD5:!DSS
+    ssl-default-bind-options no-sslv3
+    ssl-dh-param-file /opt/certbot/dhparams.pem
+
+defaults
+    log     global
+    mode    http
+    option  httplog
+    option  dontlognull
+    timeout connect 5000
+    timeout client  50000
+    timeout server  50000
+    errorfile 400 /etc/haproxy/errors/400.http
+    errorfile 403 /etc/haproxy/errors/403.http
+    errorfile 408 /etc/haproxy/errors/408.http
+    errorfile 500 /etc/haproxy/errors/500.http
+    errorfile 502 /etc/haproxy/errors/502.http
+    errorfile 503 /etc/haproxy/errors/503.http
+    errorfile 504 /etc/haproxy/errors/504.http
+
+frontend happycoders_80
+    bind *:80
+
+    # Forward Certbot verification requests to the certbot-haproxy plugin
+    acl is_certbot path_beg -i /.well-known/acme-challenge
+    use_backend certbot if is_certbot
+
+    # Redirect HTTP to HTTPS for all other cases
+    redirect scheme https code 301 if !is_certbot
+
+    default_backend happycoders_wordpress
+
+{% if certbot_cert_check_result.stat.exists %}
+frontend happycoders_443
+    bind *:443 ssl crt /opt/certbot/haproxy_fullchains/__fallback.pem crt /opt/certbot/haproxy_fullchains alpn h2,http/1.1
+
+    # Important, so that WordPress doesn't send a redirect to HTTPS ("https" must be in lowercase letters!)
+    http-request set-header X-Forwarded-Proto https
+
+    http-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+
+    # Redirect to https://www.happycoders.eu if another host name was specified.
+    # Need to do this via a dummy backend + frontend as otherwise the HSTS response header would not be sent.
+    # (see https://www.haproxy.com/de/blog/haproxy-and-http-strict-transport-security-hsts-header-in-http-redirects/)
+    use_backend redirect_to_www_happycoders_eu if !{ hdr(host) -i www.happycoders.eu }
+
+    default_backend happycoders_wordpress
+{% else %}
+    # SSL not yet activated because certificates do not exist yet.
+    # To create the certificates, run:
+    # sudo /opt/certbot/scripts/run-certbot
+    # Then execute the playbook again.
+{% endif %}
+
+# This dummy backend is needed so that the HSTS response header is also being sent with a redirect (see comment above).
+backend redirect_to_www_happycoders_eu
+    server dummy_redirect_server 127.0.0.1:8002
+
+# This dummy frontend is needed so that the HSTS response header is also being sent with a redirect (see comment above).
+frontend redirect_to_www_happycoders_eu
+    bind 127.0.0.1:8002
+    redirect prefix https://www.happycoders.eu code 301
+
+backend happycoders_wordpress
+    mode http
+    server server1 localhost:8001 check
+    http-response del-header x-powered-by
+{% if happycoders_testing|default(false) %}
+    acl authorized http_auth(happycoders_test_users)
+    acl wp-cron path_beg -i /wp-cron.php
+    http-request auth realm HappyCoders.eu unless authorized or wp-cron
+
+userlist happycoders_test_users
+    user sven password X/UgQ53BouggY
+{% endif %}
+
+backend certbot
+    log global
+    mode http
+    server certbot 127.0.0.1:8000
+I run the Ansible playbook one last time to update the HAProxy configuration on the server. I will not take a screenshot this time.
+
+For testing purposes, I call http://happycoders.de, and I am happy to see that this call is finally redirected to https://www.happycoders.eu, i.e. that both redirections to HTTPS and www.happycoders.eu work as intended. Finally, I check whether the HSTS header is set and correctly evaluated by the browser.
+
+curl -I https://happycoders.de
+Checking the redirect and the HSTS header with curl
+Checking the redirect and the HSTS header with curl
+Checking the "internal redirect" in Chrome
+Checking the “internal redirect” in Chrome
+You can see very well that the call to http://www.happycoders.eu was redirected by the browser via an “internal redirect” (status 307) to https://www.happycoders.eu and then by the server via a “temporary redirect” (status 302) to the install.php page.

@@ -1,0 +1,29 @@
+---
+- name: problem1
+  hosts: all
+  tasks:
+  - name: Download
+    get_url:
+      url: http://cccr3guro.iptime.org/reg_prac.sh
+      dest: /tmp/reg_prac.sh
+
+  - name: chmod setting
+    file:
+      path: /tmp/reg_prac.sh
+      mode: '0700'
+
+  - name: execute
+    shell: ./reg_prac.sh register
+    args:
+      chdir: /tmp/
+    register: reg1
+
+  - name: print
+    debug:
+      var: reg1.stdout
+    
+
+    
+  
+
+    

@@ -1,0 +1,8 @@
+---
+
+- name: install docker
+  include_tasks: "{{ service_type }}.yaml"
+  
+
+
+  

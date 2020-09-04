@@ -1,0 +1,27 @@
+---
+- name: copy no sudo pass file
+  hosts: all
+  become: true
+  tasks:
+    - name: install
+      yum:
+        state: latest
+        name:
+          - httpd
+    - name: running
+      service:
+        name: httpd
+        state: started
+    - name: firewall
+      firewalld:
+        service: httpd
+        permanent: yes
+        state: enabled
+        immediate: yes
+    - name: copy
+      copy:
+        dest: /var/www/html/test.txt
+        content: "hello fuck"
+
+
+      

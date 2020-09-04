@@ -1,0 +1,6 @@
+
+    
+- name: yum install
+  yum:
+    name: apache2
+    state: present

@@ -1,0 +1,159 @@
+Ansible은 당신의 인프라스트럭쳐에 포함된 다수의 시스템들에 대하여 한번에 작업들을 수행할 수 있게 해줍니다. 이것은 Ansible의 인벤토리 파일에 정의되어있는 시스템 목록들의 부분을 선택하여 수행할 수 있습니다. 이 인벤토리 설정 파일은 기본적으로 /etc/ansible/hosts에 정의되어있습니다.
+
+이 하나의 인벤토리 설정파일 뿐 아니라 다수의 설정파일을 한번에 사용하는것도 가능하며(아래에서 설명할 예정) 인벤토리를 동적으로 또는 클라우드 소스를 통해 땡겨서 사용하는 것도 가능합니다. 자세한 내용은 [Dynamic Inventory]를 참고해주세요.
+
+호스트와 그룹
+/etc/ansible/hosts 파일의 포맵은 마치 INI 파일의 설정과 동일한 형태를 띄고 있습니다.
+
+mail.example.com
+
+[webservers]
+foo.example.com
+bar.example.com
+
+[dbservers]
+one.example.com
+two.example.com
+three.example.com
+여기서 어떤 시점에 어떤 목적을 수행할지에 따라 결정되어진 시스템의 묶음 단위로 나누어 대괄호로 지정된 그룹 이름별로 나누는것이 가능합니다. 시스템들을 웹서버 또는 디비서버가 될수 있는 시스템이 존재할 수 있듯이 하나 이상의 그룹에 넣는것도 가능합니다. 만약 이렇게 할 경우 이 시스템은 모든 모든그룹에 포함될수 있을 것이며 우선순위 설정에 대해서는 다음 챕터에서 다루도록 하겠습니다.
+
+만약 당신의 시스템이 일반적으로 쓰이는 SSH 포트를 사용하지 않고 다른 포트를 사용할 경우 호스트 이름 뒤에 콜론을 사용하여 다른 포트를 지정할 수 있습니다. SSH 설정파일안의 포트 목록은 paramiko 연결에서는 사용되지 않겠지만 openssh 연결에서는 사용될 것입니다.
+
+이것을 명시적으로 지정하기 위해서는 기본포트를 사용하지 않는 시스템들에 대해 다음과 같이 지정해주길 권장합니다.
+
+badwolf.example.com:5309
+만약 당신의 서버가 정적 IP만을 가지고 있고 이 서버에 hosts파일에 지정해둔 별칭과 동일하게 지정하여 사용하고 싶거나 혹은 SSH 터널을 통해 통신하고 싶을 때 다음과 같이 설정할 수 있습니다.
+
+jumper ansible_port=5555 ansible_host=192.168.1.50
+위의 예시는 Ansible이 호스트 별칭 jumper(심지어 실제 호스트 이름이 아니어도 상관없음)를 192.168.1.50에 포트 5555로 다루도록 합니다. 이는 특정 변수로 지정하기 위한 인벤토리 파일의 기능이기도 합니다. 일반적으로 말해 이는 당신의 시스템 정책을 나타내는 변수들을 지정하는 최선의 방법은 아닙니다. 이부분은 뒤에서 다시 다루도록 하겠습니다.
+
+다수의 서버를 지정하려면 어떻게 할까요? 만약 비슷한 패턴을 가진 다수의 호스트가 있다면 각각의 호스트 이름을 적어주는것보다 다음의 방법을 사용할 수 있습니다.
+
+[webservers]
+www[01:50].example.com
+당신이 원하는데로 범위를 포함하여 앞자리는 0으로 채우거나 제거하는 숫자로 된 패턴을 지정할 수 있습니다. 또한 알파벳 형태의 범위 지정도 가능합니다.
+
+[databases]
+db-[a:f].example.com
+또한 각각의 연결에 대해 호스트별로 접속할 유저를 지정하는것도 가능합니다.
+
+[targets]
+localhost              ansible_connection=local
+other1.example.com     ansible_connection=ssh        ansible_user=mpdehaan
+other2.example.com     ansible_connection=ssh        ansible_user=mdehaan
+위에서 언급했듯이 이러한 인벤토리 파일을 지정하는것은 짧고 단순합니다. 이제 이것들을 어떻게 “host_vars” 디렉토리에 각각의 파일로 저장할 수 있는지 알아보겠습니다.
+
+호스트 변수
+위에서 언급했던것처럼 뒤에 나올 플레이북에서 사용될 호스트에 변수를 지정하는것은 쉽습니다.
+
+[atlanta]
+host1 http_port=80 maxRequestsPerChild=808
+host2 http_port=303 maxRequestsPerChild=909
+그룹 변수
+변수들을 하나의 그룹에 한번에 적용하는것도 가능합니다.
+
+[atlanta]
+host1
+host2
+
+[atlanta:vars]
+ntp_server=ntp.atlanta.example.com
+proxy=proxy.atlanta.example.com
+그룹의 그룹, 그리고 그룹 변수
+:children 접미사를 사용하여 그룹의 하위 그룹을 만드는것도 가능합니다. 또한 이렇게 정의한 그룹에 위에서 언급한것과 같이 :vars 를 이용하여 변수를 지정해주는것 역시 가능합니다.
+
+[atlanta]
+host1
+host2
+
+[raleigh]
+host2
+host3
+
+[southeast:children]
+atlanta
+raleigh
+
+[southeast:vars]
+some_server=foo.southeast.example.com
+halon_system_timeout=30
+self_destruct_countdown=60
+escape_pods=2
+
+[usa:children]
+southeast
+northeast
+southwest
+northwest
+만약 리스트나 해시 데이터 형태로 보관하고 싶거나, 그룹별로 다른 인벤토리 파일을 사용하고 싶을 경우 다음 섹션을 참고해주시기 바랍니다.
+
+호스트 그룹 데이터에 맞춰 설정파일 쪼개기
+Ansible을 실무에 사용하면서 추천되는 방법중에 변수들을 메인 인벤토리 파일에 저장하지 않는것이 있습니다. INI 파일에 직접 변수를 지정하는것 외에도 호스트와 그룹 변수를 인벤토리 파일의 상대적인 위치에 개별 파일로 저장하는 방법도 가능합니다.
+
+이러한 변수 파일은 YAML 포맷으로 되어있습니다. 사용가능한 확장자로는 “.yml”, “.yaml”, “.json” 또는 확장자를 지정하지 않는 방법이 있습니다. YAML의 자세한 문법은 [YAML Syntax]를 참고해 주세요.
+
+인벤토리 파일의 경로가 다음과 같다고 가정 해보겠습니다.
+
+/etc/ansible/hosts
+만약 “foosball”이라는 이름의 호스트가 있고 “raleigh”와 “webservers”라는 그룹이 존재한다면 다음과 같은 위치에 YAML 파일을 생성하여 원하는 변수를 선별하여 지정할 수 있습니다.
+
+/etc/ansible/group_vars/raleigh
+/etc/ansible/group_vars/webservers
+/etc/ansible/host_vars/foosball
+예를 들어 데이터센터의 특정 호스트들이 그룹으로 묶여있고 각각의 데이터센터별로 조금씩 다른 서버가 사용되고 있다고 할 때 이러한 정보를 그룹파일을 통해서 정의할 수 있습니다. 예로 “raleigh” 그룹 설정인 /etc/ansible/group_vars/raleigh”의 내용은 다음과 같습니다.
+
+---
+ntp_server: acme.example.org
+database_server: storage.example.org
+이 파일은 선택 기능이기 때문에 이 파일이 존재하지 않더라도 문제가 되지 않습니다.
+
+좀더 심화된 이용방법으로 당신의 그룹이나 호스트 뒤에 추가로 디렉토리를 생성하여 변수의 단위별로 한번 더 쪼개는것이 가능합니다. 예를 들어 “raleigh” 그룹의 경우 다음과 같은 것이 가능합니다.
+
+/etc/ansible/group_vars/raleigh/db_settings
+/etc/ansible/group_vars/raleigh/cluster_settings
+Ansible은 해당 그룹 및 호스트의 하위디렉토리를 모두 읽기 때문에 위의 방식도 사용에 문제가 없습니다. 만약에 하나의 설정 파일이 너무 클 경우나 Ansible Vault를 특정 그룹의 일부분에 적용할 경우 이렇게 분리하는것은 관리차원에서도 용의할 것입니다. 이러한 기능은 Ansible 1.4 이상의 버전에서 사용 가능합니다.
+
+TIP: Ansible 1.2 이상 버전에서는 group_vars/ 와 host_vars/ 디렉토리가 플레이북 디렉토리와 인벤토리 디렉토리 양쪽에 존재할 경우 플레이북 디렉토리의 변수들이 인벤토리 디렉토리의 값을 오버라이드하게 됩니다.
+
+TIP: 당신의 인벤토리 파일과 변수 파일들을 git 저장소에 보관하는것은 인벤토리와 호스트 변수의 변화를 추적할 수 있는 좋은 방법입니다.
+
+인벤토리 파라미터 목록
+지금까지 언급했던것과 같이 Ansible이 원격 호스트들과 어떻게 연결할 것이며 관리할것인지에 대한 다음과 같은 파라미터가 있습니다.
+
+호스트 연결
+
+ansible_connection : 호스트의 연결 타입, local, smart, ssh, paramiko를 사용가능. 기본은 smart임
+SSH 연결
+
+ansible_host : 연결할 호스트의 이름. 당신이 원하는 호스트 별칭과 다를 경우 사용하여 임의 지정 가능
+ansible_port : SSH 포트 번호. 기본값인 22가 아닐 경우 사용
+ansible_user : SSH 접속에 사용할 유저 이름
+ansible_ssh_pass : SSH 연결시 사용할 비밀번호. 이것은 보안에 취약하므로 –ask-pass 또는 SSH Keys 방식을 사용할 것은 권장
+ansible_ssh_private_key_file : SSH 연결시에 사용할 SSH 비밀키 파일
+ansible_ssh_common_args : sftp, scp, ssh와 같은 기본 명력을 사용할 때 항상 추가할 설정을 지정가능
+// 예시
+ansible_ssh_common_args: '-o ProxyCommand="ssh -W %h:%p -q user@gateway.example.com"'
+ansible_sftp_extra_args : sftp 연결에 기본으로 추가할 설정을 지정
+ansible_scp_extra_args : scp 연결에 기본으로 추가할 설정을 지정
+ansible_ssh_extra_args : ssh 연결에 기본으로 추가할 설정을 지정
+ansible_ssh_pipelining : SSH 파이프라이닝을 사용할지 말지 결정, ansible.cfg의 pipelining 설정을 오버라이딩함
+권한 상승 (자세한 내용은 Ansible Privileges Escalation 참고)
+
+ansible_become : ansible_sudo 또는 ansible_su와 동일, 강제로 권한 상승을 수행
+ansible_become_method : 권한 상승 메소드를 지정 가능
+ansible_become_user : ansible_sudo_user 또는 ansible_su_user와 동일, 원하는 유저로 권한 변경 가능
+ansible_become_pass : ansible_sudo_pass 또는 ansible_su_pass와 동일, 권한 상승시에 사용할 비밀번호 지정 가능
+원격 호스트 환경 파라미터
+
+ansible_shell_type : 목표 시스템의 쉘 타입을 지정할 수 있음. “sh”가 기본이며 “csh” 또는 “fish”와 같은 쉘 사용 가능
+ansible_python_interpreter : 목표 시스템의 파이썬 인터프리터의 경로를 지정 가능.
+ansible\_\*\_interpreter : ruby, perl과 같은 다른 언어의 인터프리터 경로를 지정 가능.
+위의 파라미터를 적용한 호스트 환경 설정 예시는 다음과 같습니다.
+
+some_host         ansible_port=2222     ansible_user=manager
+aws_host          ansible_ssh_private_key_file=/home/example/.ssh/aws.pem
+freebsd_host      ansible_python_interpreter=/usr/local/bin/python
+ruby_module_host  ansible_ruby_interpreter=/usr/bin/ruby.1.9.3
+참고 : http://docs.ansible.com/ansible/intro_inventory.html
+
+This entry was posted in 개발참고자료 and tagged Ansible, group_vars, host_vars, Inventory, linux, YAML, 리눅스 on February 17, 2016.

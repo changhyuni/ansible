@@ -1,0 +1,22 @@
+---
+- name: test
+  hosts: host1
+  gather_facts: no
+  tasks:
+  - name: echo test
+    shell: echo {{ item }}
+    loop:
+      - "one"
+      - "two"
+    register: test1
+
+  - name: debug test
+    debug:
+      # msg: "{{ test1.results. |  }}"
+      msg: "{{ item.stdout }}"
+  #   register: test2
+  # - name: debug var test
+  #   debug:
+  #     msg: test2
+    when: item.stdout == "one"
+    loop: "{{ test1.results }}"

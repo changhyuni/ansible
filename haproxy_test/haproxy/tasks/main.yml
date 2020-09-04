@@ -1,0 +1,14 @@
+---
+
+- name: install apache
+  include_tasks: "{{ service_type }}.yaml"
+
+- name: install haproxy
+  include_tasks: haproxy_install.yaml
+    
+  
+- name: index template
+  include_tasks: service_page.yaml
+
+- name: haproxy template
+  include_tasks: haproxy.yaml

@@ -1,0 +1,6 @@
+---
+- name: install apache web server
+  hosts: all
+  become: yes
+roles:
+    - role: ./role/go

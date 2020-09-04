@@ -1,0 +1,12 @@
+---
+service_type: "{{ 'CentOS' if ansible_distribution == 'CentOS'
+          else 'Ubuntu' if ansible_distribution == 'Ubuntu'
+          else 'Unkown' }}"
+service_name: "{{ 'httpd' if ansible_distribution == 'CentOS'
+          else 'httpd' if ansible_distribution == 'Ubuntu'
+          else 'Unkown' }}"
+
+containers: 2
+container_name: docker_ubuntu
+container_image: ubuntu:18.04
+container_command: sleep 1d

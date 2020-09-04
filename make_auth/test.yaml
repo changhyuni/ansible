@@ -1,0 +1,8 @@
+---
+- hosts: host1
+  remote_user: user
+  tasks:
+    - name: create
+      become: yes
+      user:
+        name: chang 

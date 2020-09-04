@@ -1,0 +1,16 @@
+---
+- hosts: host1
+  gather_facts: no
+  tasks:
+      - block:
+          - name: msg block
+            debug:
+              msg: "block"
+        rescue:
+          - name: rescue msg
+            debug:
+              msg: "rescue"
+        always:
+          - name: always msg
+            debug:
+              msg: "always" 

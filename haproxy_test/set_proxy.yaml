@@ -1,0 +1,6 @@
+---
+- name: install apache & haproxy
+  hosts: all
+  become: yes
+  roles:
+    - role: haproxy

@@ -1,0 +1,6 @@
+- hosts: all
+  tasks:
+  - name: Set keys
+    user: user
+    state: present
+    key: "{{ lookup('file', '/home/student/.ssh/id_rsa.pub') }}"
